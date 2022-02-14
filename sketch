@@ -1,0 +1,132 @@
+#include <ESP8266WiFi.h>
+#include "HTTPSRedirect.h"
+#include "DebugMacros.h"
+float h;
+float t;
+String sheetHumid = "A2";
+String sheetTemp = "B2";
+const char* mywifi = "OPPO A53";  
+const char* mywifiparol = "88888888";  
+const char* google = "script.google.com";
+const char *scriptID = "AKfycby53Mp2oYTfox3MvfGlYrFFd67RgHHM9otWGXPSLBCUQraFg3Sh/"; 
+const int httpsPort = 443; 
+const char* fingerprint = "";
+String url = String("/macros/s/") + scriptID + "/exec?value=Temperature"; 
+String url2 = String("/macros/s/") + scriptID + "/exec?cal"; 
+String payload_base =  "{\"command\": \"appendRow\", \
+                    \"sheet_name\": \"aboba\", \
+                       \"values\": ";
+String payload = "";
+HTTPSRedirect* client = nullptr;
+
+void setup() {
+  delay(1000);
+  Serial.begin(115200);
+  Serial.println();
+  Serial.print("Connecting to wifi: ");
+  Serial.println(mywifi);
+  
+  WiFi.begin(mywifi, mywifiparol);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
+  client = new HTTPSRedirect(httpsPort);
+  client->setInsecure();
+  client->setPrintResponseBody(true);
+  client->setContentTypeHeader("application/json");
+  Serial.print("Connecting to ");
+  Serial.println(google);
+  bool flag = false;
+  for (int i = 0; i < 5; i++) {
+    int retval = client->connect(google, httpsPort);
+    if (retval == 1) {
+      flag = true;
+      break;
+    }
+    else
+      Serial.println("Connection failed. Retrying...");
+  }
+  if (!flag) {
+    Serial.print("Could not connect to server: ");
+    Serial.println(google);
+    Serial.println("Exiting...");
+    return;
+  }
+  Serial.println("\nWrite into cell 'A1'");
+  Serial.println("------>");
+  client->GET(url, google);
+  
+  Serial.println("\nGET: Fetch Google Calendar Data:");
+  Serial.println("------>");
+  client->GET(url2, google);
+ Serial.println("\nStart Sending Sensor Data to Google Spreadsheet");
+  
+  delete client;
+  client = nullptr;
+}
+void loop() {
+  h = random(100000);
+  t = random(100);
+  if (isnan(h) || isnan(t)) { 
+    Serial.println(F("Failed to read from DHT sensor!"));
+    return;
+  }
+  Serial.print("Humidity: ");  Serial.print(h);
+  sheetHumid = String(h);
+  Serial.print("%  Temperature: ");  Serial.print(t);  Serial.println("&#194;°C ");
+  sheetTemp = String(t);
+  static int error_count = 0;
+  static int connect_count = 0;
+  const unsigned int MAX_CONNECT = 20;
+  static bool flag = false;
+  payload = payload_base + "\"" + sheetTemp + "," + sheetHumid + "\"}";
+  if (!flag) {
+    client = new HTTPSRedirect(httpsPort);
+    client->setInsecure();
+    flag = true;
+    client->setPrintResponseBody(true);
+    client->setContentTypeHeader("application/json");
+  }
+  if (client != nullptr) {
+    if (!client->connected()) {
+      client->connect(google, httpsPort);
+      client->POST(url2, google, payload, false);
+      Serial.print("Sent : ");  Serial.println("Temp and Humid");
+    }
+  }
+  else {
+    DPRINTLN("Error creating client object!");
+    error_count = 5;
+  }
+  if (connect_count > MAX_CONNECT) {
+    connect_count = 0;
+    flag = false;
+    delete client;
+    return;
+  }
+  Serial.println("POST or SEND Sensor data to Google Spreadsheet:");
+  if (client->POST(url2, google, payload)) {
+    ;
+  }
+  else {
+    ++error_count;
+    DPRINT("Error-count while connecting: ");
+    DPRINTLN(error_count);
+  }
+  if (error_count > 3) {
+    Serial.println("Halting processor...");
+    delete client;
+    client = nullptr;
+    Serial.printf("Final free heap: %u\n", ESP.getFreeHeap());
+    Serial.printf("Final stack: %u\n", ESP.getFreeContStack());
+    Serial.flush();
+    ESP.deepSleep(0);
+  }
+  
+  delay(2000);
+}
